@@ -1,0 +1,1469 @@
+---
+title: "Gut microbiota does not drive host sociality in the European earwig"
+subtitle : Data processes & analyses
+author: |
+  | Marie-Charlotte, Cheutin^a,1^, Benjamin, Leclerc^a^, Joël, Meunier^a^.  
+  <p> </p> 
+  <font size="2"> ^a^ Institut de Recherche sur la Biologie de l’Insecte, UMR 7261, CNRS, University of Tours, Tours, France</font>  
+  <p> </p> 
+  <font size="3"> ^1^To whom correspondence should be addressed. E-mail: mccheutin@gmail.com</font>  
+abstract: "A quick workflow to performed the analyses used to investigate the individual aggregation variation in the European earwig adult female *Forficula auricularia*. Here we report both methods and results in plain text and R code. You can choose to show all code or hide the code using the button in the upper right hand corner of the front page (default is hide) as well as download the .Rmd file to tweak the code."
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_folding: hide
+    code_download: yes
+    toc: yes
+    toc_float: yes
+    highlight: espresso
+    theme: darkly
+  pdf_document: default
+  #cool_themes: default, cerulean, cosmo, darkly, flatly, journal, lumen, sandstone, simplex, spacelab, united, yeti
+---
+
+
+The package list you need to install and load for the workflow: 
+
+```{r packages, eval = T, message=FALSE, warning=FALSE}
+rm(list=ls())
+cran_packages   <- c("knitr", "phyloseqGraphTest", "phyloseq", "shiny", "microbiome",
+                     "tidyverse", "miniUI", "caret", "pls", "e1071", "ggplot2",
+                     "randomForest","entropart", "vegan", "plyr", "dplyr","here", "ggrepel", "nlme", 
+                     "R.utils", "gridExtra", "googledrive", "googlesheets", "phangorn", "devtools", 
+                     "rmarkdown", "sys","picante","reshape2", "devtools", "PMA","structSSI","ade4", 
+                     "ape", "Biostrings", "igraph", "ggnetwork", "intergraph", "ips","scales", "kableExtra", 
+                     "pgirmess","treemap", "ggpubr", "rstatix", "ggthemes", "ggpubr","outliers", "ICC",
+                     "moments", "cowplot", "pgirmess", "dunn.test", "viridis", "grid", "AICcmodavg", "raster", 
+                     "FactoMineR", "PerformanceAnalytics", "Hmisc", "DHARMa", "ade4", "car","smplot",
+                     "labdsv","epitools","ggsignif", "biomformat","randomcoloR", "lubridate","dichromat",
+                     "hillR", "adespatial", "DT")
+
+github_packages <- c("jfukuyama/phyloseqGraphTest",'smin95/smplot', "gauravsk/ranacapa", "jfq3/QsRutils", "pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+github_lib <- c("phyloseqGraphTest","smplot", "ranacapa","QsRutils", "pairwiseAdonis")
+bioc_packages   <- c("phyloseq", "genefilter", "impute", "dada2", "DECIPHER", "ggtree")
+```
+
+```{r setup installing, eval = F, warning = FALSE, message=FALSE, include = FALSE}
+# Install CRAN packages (if not already installed)
+inst <- cran_packages %in% installed.packages()
+if (any(! inst)) {
+  install.packages(cran_packages[!inst], repos = "http://cran.rstudio.com/") }
+#
+inst <- github_packages %in% installed.packages()
+if (any(! inst)) {
+  devtools::install_github(github_packages[!inst], force = T) }
+#
+inst <- bioc_packages %in% installed.packages()
+if (any(! inst)) {
+  BiocManager::install(bioc_packages[!inst]) }
+```
+
+```{r setup loading, eval = T, warning = FALSE, message=FALSE,results='hide'}
+knitr::opts_chunk$set(eval = T)
+# Load libraries
+sapply(c(cran_packages, bioc_packages, github_lib), require, character.only = TRUE)
+detach("package:dplyr", unload = TRUE)
+detach("package:plyr", unload = TRUE)
+library(plyr)
+library(dplyr)
+set.seed(1000)
+```
+
+Prepare your working directory
+
+```{r set_wd, eval=T}
+knitr::opts_knit$set(root.dir = getwd())
+path = getwd()
+# This will setwd to wherever the .Rmd file is opened.
+dir_dataset <- paste0(path,"/dir_dataset/")
+dir_graph <- paste0(path,"/dir_graph/")
+dir_fastq_source <- paste0(dir_dataset,"sequences/")
+dir_refdb   <- paste0(dir_dataset, "reference_databases/")
+dir_filtered <- paste0(dir_dataset,"sequences/filtered/")
+```
+
+```{r mkdirs, eval=F}
+dir.create(dir_dataset, recursive = T); dir.create(dir_graph, recursive = T);dir.create(dir_filtered, recursive = TRUE) ; dir.create(dir_refdb, recursive = TRUE)
+```
+
+***
+
+## Note
+
+<style>
+div.blue { background-color:#5b8e8a; border-radius: 5px; padding: 20px;}
+</style>
+<div class = "blue">
+<font size="4">This document is  **interactive**. You can **sort and scroll** through most of the tables and figures. In the upper right hand corner of the front page is a `Code` button. Use this to show or hide all the code in the document (default is hide) as well as download the `.Rmd` file which you can use to extract the code.
+</div>
+
+### Abbreviations  
+
+* **Aggregation Score (AS)**: Occurrence (the number of counts observed in 
+the aggregation chamber) for 24h or 72h observation.
+
+* [Amplicon Sequence Variant](https://www.nature.com/articles/ismej2017119){target="_blank"} (**ASV**): Exact sequence variant---analogous to an OTU---but with single nucleotide resolution. 
+
+### Study goals
+1. Testing an operating system of a multiple high-sensitive cameras for 72h
+capturing the simultaneous positions of 66 females *F. auricularia* ([Van Meyel et al., (2022)](https://doi.org/10.1016/j.anbehav.2022.09.003)).
+
+2. Confirm the repeatability of the aggregation level at individual scale (*i.e.*, over 72h) and between individual (*i.e.,* between independent weeks of experiments).
+
+3. Analyse the potential influence of gut microbiota on the level of aggregation through
+microbial diversity comparisons.
+
+4. Perform a gut transplant experiment in a 2x2 full-factorial design, in which we fed high- or low-aggregation females with the gut of high- or low- aggregation females and then measured the aggregation score of the recipient females.
+
+***
+
+<a id="back to top"></a> 
+
+## Workflow overview
+
+#### [Part I: Data preparation](#Part I: Data preparation)
+
+The data are located in three files available in Supplementary Material of the article.
+
+* **aggregation_data** : The aggregation_data contains information of all individuals for each hour with further biological measures.
+
+* **ps_rff** : The phyloseq object already normalized at **10 180 sequences** (*i.e.,* the minimum sample sum of the dataset) for a final dataset constituted by **397 020 sequences (1 593 ASVs)** for 19 low- and 20 high-aggregation females (one sample did not amplify).
+
+* **transplant_data** : The data concerning the individual involved in the gut transplant with their AS before the gut transplant (for donors and recipients).
+
+* **aggregation_after_transplant** : The data concerning the recipients individual aggregation data for each hour. 
+
+> In case you want to process the reads from your own, see **[Part III: Microbiota diversity influence on Aggregation level](#Part III: Microbiota diversity influence on Aggregation level)**.
+
+#### [Part II: Variability intra/inter individuals](#Part II: Variability intra/inter individuals)
+
+We first tested whether the number of females’ occurrences in the aggregation chamber (*i.e.*, Aggregation Score) was **repeatable over the three days** of measurements and/or overall changed **throughout the six recording sessions** (from the 10 June 2022 to the 25 July 2022). To this end, we conducted a series of three Linear Models (LMs), in which we entered the Aggregation Score of each day as the response variable, and the Aggregation Score of one of the two other day (continuous), the week of the recording session (category) and the interaction as explanatory variables.
+
+
+> Ps: For each statistical model, we checked that all assumptions were fulfilled using the DHARMa R package v0.4.6 [(Hartig, 2022)](http://florianhartig.github.io/DHARMa/).
+
+#### [Part III: Microbiota diversity and Aggregation level](#Part III: Microbiota diversity and Aggregation level)
+
+This part allows to perform a descriptive analysis of the microbiota from the **ps_rff** object and to further calculate both alpha and beta diversity taking into account the taxonomy and the phylogeny, for quantitative and qualitative informations from microbial communities.
+
+#### [Part IV: Gut transplantation](#Part IV: Gut transplantation)
+
+Last, this  part concerns the gut transplant experiment in which we fed high- or low-aggregation females with the gut of high- or low- aggregation females and then measured the aggregation score of the recipient females.
+
+***
+
+<a id="Part I: Data preparation"></a>
+
+## Part I: Data preparation
+[back to top](#back to top)
+
+### Load the files
+
+First, download the metadata file in the **/dir_dataset** folder and load it to create a 
+new table with **Aggregation Score** for each sample at each experimental day (D1 = day1,
+D2 = day2 and D3 = day3).
+
+```{r file load, eval = T}
+aggregation_data <- read.table(file = paste0(dir_dataset, "aggregation_data.txt"), header = T, sep = "\t")
+```
+
+```{r AS data file,  eval = T, message=FALSE, warning=FALSE}
+AS_data <- left_join(
+  aggregation_data %>% 
+    group_by(ID,day,sampling_date) %>% 
+    summarise(Aggregation = sum(attraction)) %>%
+    pivot_wider(names_from = day, values_from = Aggregation) %>%
+    mutate(AS72 = sum(c_across(D1:D3))) %>%
+    as.data.frame(),
+  aggregation_data %>% 
+    select(!c(sampling_date, attraction, day, time_exp)) %>% 
+    unique(),
+  by = "ID")
+
+write.table(AS_data,file = paste0(dir_dataset, "AS_data.txt"), sep ="\t", row.names = F)
+```
+
+### Presentation of the data
+
+The aggregation_data is constituted
+* [**ID**]{target="_blank"} : The ID of the female sample.
+
+* [**sampling_date**]{target="_blank"}: Sampling date is associated to a run number.
+
+* [**attraction**]{target="_blank"}: Presence (1) or absence (0) in the aggregation chamber at the observation t.
+
+* [**time_exp**]{target="_blank"}: Observation number (between 1 and 72)
+
+* [**day**]{target="_blank"}: The day number or the experiment (D1,D2 or D3) allowing to calcul the AS at **D1, D2 and D3 in the AS_data**.
+
+* [**aggregation**]{target="_blank"}: the female is very stuck to the attractive chamber (Y = yes) or not (N = no) when she is in the aggregation chamber. The total over the 72 observations allows to obtain the **AS72 in the AS_data**.
+
+
+
+```{r AS data , eval = T, warning = FALSE, fig.align = "center", message=FALSE}
+AS_data <- read.table(file = paste0(dir_dataset, "AS_data.txt"), header = T, sep = "\t")
+datatable(AS_data %>%
+            filter(status %in% c("High","Low")),
+          rownames = FALSE, 
+          width = "100%",
+          colnames = c("ID", "Sampling date","AS at D1", "AS at D2", "AS at D3", "AS over 72h", "Aggregation level"), 
+          caption = htmltools::tags$caption(style = "caption-side: 
+                                            bottom; text-align: left;", 
+                                            "Table: ", 
+                                            htmltools::em("short table presentation for the females presenting low- and high-aggregation levels.")), 
+          extensions = "Buttons", 
+          options = list(columnDefs = 
+                           list(list(className = "dt-left", targets = 0)), 
+                         initComplete = JS("function(settings, json) {",
+                                           "$(this.api().table().header()).css({'background-color': '#000', 'color': '#fff'});
+                                           $('body').css({'font-family': 'Calibri'});
+                                           $('body').css({'font-color': '#fff'});",
+                                           "}"),
+                         dom = "Blfrtip", pageLength = 5, 
+                         lengthMenu = c(5, 10, 25, 50), 
+                         buttons = c("csv", "copy"), 
+                         scrollX = TRUE, scrollCollapse = TRUE)) %>%
+  formatStyle("ID", backgroundColor = 'white')%>%
+  formatStyle("sampling_date", backgroundColor = 'white')%>%
+  formatStyle("D1", backgroundColor = 'white')%>%
+  formatStyle("D2", backgroundColor = 'white')%>%
+  formatStyle("D3", backgroundColor = 'white')%>%
+  formatStyle("AS72", backgroundColor = 'white')%>%
+  formatStyle("status", backgroundColor = 'white')
+
+```
+
+## Part II: Variability intra/inter individuals
+[back to top](#back to top)
+
+### Aggregation distribution
+
+We illustrated the aggregation between individuals in 385 female earwigs to determine empirically the variability of this behaviour and its constant in time under same environmental conditions (here, the same 3 attractants females).
+
+```{r frequency distribution , eval = T, results='hide'}
+AS_data <- read.table(file = paste0(dir_dataset, "AS_data.txt"), header = T, sep = "\t")
+
+Fig_AS72 <- AS_data %>%
+  ggplot(aes(x=AS72)) +
+  geom_histogram(aes(y = after_stat(density)),alpha = 0.5, bins = 72 ,color = "black",linewidth = 0.5) +
+  theme_bw() +
+  theme(axis.text = element_text(family = "serif",size = 12),
+        axis.text.x = element_text(family = "serif",size = 12),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.title.x = element_text(size=14, family = "serif"),
+        axis.title.y = element_text(size=14, family = "serif"),
+        legend.position = "none") +
+  xlab("Aggregation Score") +
+  ylab("Frequency")
+Fig_AS72
+
+pdf(file = paste0(dir_graph, "Fig_AS72.pdf"), he = 7, wi = 7)
+Fig_AS72
+dev.off()
+```
+
+We test if the aggregation is a deterministic or random trait by comparing the distribution with a random distribution of AS at 72h we compared to our observed AS72 with a Khi2 test (**i.e.,** aka 1/3 chance of 72 chance to be in the aggregation chamber). This confirm the fact that the behaviour of the female is not random.
+
+```{r normal distribution , eval = T}
+AS_data <- read.table(file = paste0(dir_dataset, "AS_data.txt"), header = T, sep = "\t")
+aggregation_data <- read.table(file = paste0(dir_dataset,"aggregation_data.txt"), header = T, sep = "\t")
+AS <- c(0,1)
+AS_th <- sample(AS, size = 72*385, replace = T, p= c(2/3,1/3)) # if random, 2/3 chance to be in the non-aggregative chamber and 1/3 to be in the aggregative chamber
+aggregation_th <- aggregation_data
+aggregation_th$attraction = AS_th
+
+AS_data_th <- aggregation_th %>% 
+  group_by(ID,day,sampling_date) %>% 
+  summarise(Aggregation = sum(attraction)) %>%
+  pivot_wider(names_from = day, values_from = Aggregation) %>%
+  mutate(AS72 = sum(c_across(D1:D3))) %>%
+  as.data.frame()
+
+comp <- cbind("AS_obs" = AS_data$AS72, 
+              "AS_th" = AS_data_th$AS72) %>%
+  t() %>%
+  data.frame()
+
+colnames(comp) <- AS_data$ID
+chisq.test(comp)
+```
+
+### Aggregation repeatability
+
+To confirm the robustness of our aggregation score (AS), we first analysed the repeatability of this value over the three days on which measurements were taken using three Linear models (LM). In these models, the response variable was the AS measured either on day 2, 3 or 3, whereas the explanatory variables were the AS measured on day 1, 2 or 1, respectively, the week of the recording session (six sessions: categorical factor) and the interaction between these two variables.
+
+> Ps: For each statistical model, we checked that all assumptions were fulfilled using the DHARMa R package v0.4.6 [(Hartig, 2022)](http://florianhartig.github.io/DHARMa/). Here is an example for the LM run on the D2 and D1.
+
+```{r DHARMA , eval = T, results= 'hide'}
+AS_data <- read.table(file = paste0(dir_dataset, "AS_data.txt"), sep ="\t", header = T)
+
+lm_D2D1 <- lm(D2 ~ D1 * sampling_date , data = AS_data)
+simulationOutput_D2D1 <- simulateResiduals(fittedModel = lm_D2D1, plot = T)
+testResiduals(lm_D2D1)
+```
+
+As such, we tested either the AS at D2 was explained by the AS at D1 whatever the sampling run...
+
+```{r D2 ~ D1, eval = T}
+AS_data <- read.table(file = paste0(dir_dataset, "AS_data.txt"), sep ="\t", header = T)
+
+lm_D2D1 <- lm(D2 ~ D1 * sampling_date , data = AS_data)
+car::Anova(lm_D2D1)
+```
+
+Either the AS at D3 was explained by the AS at D2 whatever the sampling run...
+
+```{r D3~ D2, eval = T}
+AS_data <- read.table(file = paste0(dir_dataset, "AS_data.txt"), sep ="\t", header = T)
+
+lm_D3D2 <- lm(D3 ~ D2 * sampling_date , data = AS_data)
+car::Anova(lm_D3D2)  
+```
+
+And finally either the AS at D3 was explained by the AS at D1 whatever the sampling run.
+```{r D3 ~ D1, eval = T}
+AS_data <- read.table(file = paste0(dir_dataset, "AS_data.txt"), sep ="\t", header = T)
+
+lm_D3D1 <- lm(D3 ~ D1 * sampling_date , data = AS_data)
+car::Anova(lm_D3D1)
+```
+
+
+```{r days graph, eval = T, message=FALSE, warning=FALSE, fig.width=16 , fig.height=5, results='hide'}
+AS_data <- read.table(file = paste0(dir_dataset, "AS_data.txt"), sep ="\t", header = T)
+### _ Between D1 and D2 ----
+D1_D2_runs <- AS_data %>%
+  ggplot(aes(x = D2, y = D1, color = sampling_date)) +
+  geom_point(aes(color = sampling_date), alpha = 0.5) +
+  geom_smooth(method= lm, se=T, fullrange=T) +
+  ggpubr::color_palette("ucscgb")+
+  ylab("Aggregation Score (Day 2)") +
+  xlab("Aggregation Score (Day 1)") +
+  theme_bw() +
+  theme(axis.text = element_text(family = "serif",size = 16), 
+        axis.text.x = element_text(family = "serif",size = 16),
+        axis.text.y = element_text(family = "serif",size = 16),
+        axis.title.x = element_text(family = "serif",size = 18),
+        axis.title.y = element_text(family = "serif",size = 18),
+        legend.text = element_text(family = "serif", size = 16),
+        legend.title = element_text(family = "serif", size = 18),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none")
+
+### _ Between D1 and D3 ----
+D1_D3_runs <- AS_data %>%
+  ggplot(aes(x = D1, y = D3, color = sampling_date)) +
+  geom_point(aes(color = sampling_date), alpha = 0.5) +
+  geom_smooth(method= lm, se=T, fullrange=T) +
+  ggpubr::color_palette("ucscgb")+
+  ylab("Aggregation Score (Day 3)") +
+  xlab("Aggregation Score (Day 1)") +
+  theme_bw() +
+  theme(axis.text = element_text(family = "serif",size = 16), 
+        axis.text.x = element_text(family = "serif",size = 16),
+        axis.text.y = element_text(family = "serif",size = 16),
+        axis.title.x = element_text(family = "serif",size = 18),
+        axis.title.y = element_text(family = "serif",size = 18),
+        legend.text = element_text(family = "serif", size = 16),
+        legend.title = element_text(family = "serif", size = 18),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none")
+
+### _ Between D2 and D3 ----
+D2_D3_runs <- AS_data %>%
+  ggplot(aes(x = D2, y = D3, color = sampling_date)) +
+  geom_point(aes(color = sampling_date), alpha = 0.5) +
+  geom_smooth(method= glm, se=T, fullrange=T) +
+  ggpubr::color_palette("ucscgb")+
+  ylab("Aggregation Score (Day 3)") +
+  xlab("Aggregation Score (Day 2)") +
+  theme_bw() +
+  theme(axis.text = element_text(family = "serif",size = 16), 
+        axis.text.x = element_text(family = "serif",size = 16),
+        axis.text.y = element_text(family = "serif",size = 16),
+        axis.title.x = element_text(family = "serif",size = 18),
+        axis.title.y = element_text(family = "serif",size = 18),
+        legend.text = element_text(family = "serif", size = 16),
+        legend.title = element_text(family = "serif", size = 18),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none")
+
+runs_legend <- AS_data %>%
+  ggplot(aes(x = D2, y = D3, color = sampling_date)) +
+  geom_point(aes(color = sampling_date), alpha = 0.5) +
+  geom_smooth(method= glm, se=T, fullrange=T) +
+  ggpubr::color_palette("ucscgb")+
+  ylab("Aggregation Score (Day 3)") +
+  xlab("Aggregation Score (Day 2)") +
+  theme_bw() +
+  theme(axis.text = element_text(family = "serif",size = 16), 
+        axis.text.x = element_text(family = "serif",size = 16),
+        axis.text.y = element_text(family = "serif",size = 16),
+        axis.title.x = element_text(family = "serif",size = 18),
+        axis.title.y = element_text(family = "serif",size = 18),
+        legend.text = element_text(family = "serif", size = 16),
+        legend.title = element_text(family = "serif", size = 18),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  labs(color = "Sampling week")
+
+Fig_repeat <- ggarrange(legend.grob = get_legend(runs_legend),
+          legend = "right",
+          D1_D2_runs,D1_D3_runs,D2_D3_runs,
+          nrow = 1, ncol = 3)
+Fig_repeat
+
+pdf(file = paste0(dir_graph, "Fig_repeat.pdf"), he = 5, wi = 16)
+Fig_repeat
+dev.off()
+```
+
+
+
+## Part III: Microbiota diversity and Aggregation level
+[back to top](#back to top)
+
+This is the bioinformatical pipeline to process the libraries originating from the gut microbiota 
+
+> The libraries used in this study (and available in [NCBI](https://https://www.ncbi.nlm.nih.gov/){target="_blank"} under the bioproject accession no. **PRJNA936136**).
+Before starting, libraries had to be demultiplexed and linkers with primers sequences removed before being processed through [DADA2 pipeline](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4927377/){target="_blank"} (Callahan et al., 2016). Briefly, sequences are trimmed and filtered for quality, dereplicated and inferred in ASVs (Glassman & Martiny, 2018). Forward and reverse ASVs are merged and finally generated into a count table where chimera are identified and removed. The taxonomy assignment is performed using the [SILVA reference database (*release 138*)](https://academic.oup.com/nar/article/41/D1/D590/1069277){target="_blank"} (Quast et al., 2013). A [phyloseq](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0061217){target="_blank"} object (McMurdie & Holmes, 2013) is generated for further statistical analyses.
+
+###  DADA2 process
+
+First, you need to load the original R1 R2 reads folder in the **/dir_dataset/dir_fastq_source** folder. Then, download the [SILVA database references](https://zenodo.org/record/1172783#.XpSB25MzZQI) into the **/dir_dataset/dir_ref_db** folder. 
+
+In this study,  we used the primers set **343F - 794R** specific for the region V3V4 of the prokaryotic 16S rDNA ([Muyzer, 1993](https://doi:10.1128/aem.59.3.695-700.1993)). 
+```{r primers description, eval = F}
+primer_F_343 = "ACGGRAGGCAGCAG"
+primer_R_784 = "TACCAGGGTATCTAATC"
+```
+
+Read the folders to be sure all files are in it and that direction is well indicated.
+Get the list of your samples and extract the sample names: 
+```{r ref_folder, eval= F}
+nms_seq_runs  <- list.files(dir_fastq_source)
+paths_seq_runs <- list.files(dir_fastq_source, full.names = TRUE) %>% setNames(nms_seq_runs)
+
+nms_refdb   <- list.files(dir_refdb)
+paths_refdb <- list.files(dir_refdb, full.names = TRUE) %>% setNames(nms_refdb)
+
+fns <- sort(paths_seq_runs)
+fns <- fns[str_detect(basename(fns), ".fastq")]
+fns_R1 <- fns[str_detect(basename(fns), "R1_001.fastq")]
+fns_R2 <- fns[str_detect(basename(fns), "R2_001.fastq")]
+if(length(fns_R1) != length(fns_R2)) stop("Forward and reverse files do not match.")
+
+sample_names <- sapply(strsplit(basename(fns_R1), "_"), `[`, 1)
+sample_names
+```
+
+Once sample names cut, you can remove the primer sequence from your data by "counting" the number of nucleotides of each primer. Because nucleotides maybe me flowing, it not advised to remove the sequence of the primer by its nucleotide composition.
+
+```{r remove_primer_seq , eval = F}
+primer_length_fwd = str_length(primer_F_343)
+primer_length_rev = str_length(primer_R_784)
+```
+
+#### Quality profiles and filter/trim the sequences
+Now you can plot the quality profiles of your reads (which is usely better on the R1) in order to truncate the sequences before quality drastically decrease. Then, you can filter your sequences and trim the primer length. 
+
+```{r Quality profiles and filtering , eval = F}
+qual_R1 <- plotQualityProfile(fns_R1[1])
+qual_R2 <- plotQualityProfile(fns_R2[1])
+ggsave(qual_R1, file = paste0(dir_graph , "quality_profile_R1.png"))
+ggsave(qual_R2, file = paste0(dir_graph, "quality_profile_R2.png"))
+filt_R1 <- str_c(dir_filtered, sample_names, "_R1_filt.fastq")
+filt_R2 <- str_c(dir_filtered, sample_names, "_R2_filt.fastq")
+names(filt_R1) <- sample_names
+names(filt_R2) <- sample_names
+set.seed(1000)
+out <- filterAndTrim(fns_R1, filt_R1, fns_R2, filt_R2, truncLen=c(240,240),
+                     maxN=0, maxEE=c(2,2), truncQ=2, trimLeft=c(primer_length_fwd,primer_length_rev) , rm.phix=TRUE,
+                     compress=TRUE, multithread=TRUE)
+head(out)
+
+sample_names <- sapply(strsplit(basename(filt_R1), "_"), `[`, 1) # Assumes filename = samplename_XXX.fastq.gz
+sample_namesR <- sapply(strsplit(basename(filt_R2), "_"), `[`, 1) # Assumes filename = samplename_XXX.fastq.gz
+if(!identical(sample_names, sample_namesR)) stop("Forward and reverse files do not match.")
+names(filt_R1) <- sample_names
+names(filt_R2) <- sample_names
+set.seed(1000)
+```
+
+Finally, you can learn the error rates for both reads and save them. 
+```{r Learn the error rate,  eval = F}
+errF <- learnErrors(filt_R1,nbases=1e8, multithread=TRUE)
+errR <- learnErrors(filt_R2, nbases=1e8, multithread=TRUE)
+plotErrors_F <- plotErrors(errF, nominalQ=TRUE)
+plotErrors_R <- plotErrors(errR, nominalQ=TRUE)
+ggsave(plotErrors_F, file = paste0(dir_graph , "plotErrors_F.png"))
+ggsave(plotErrors_R, file = paste0(dir_graph, "plotErrors_R.png"))
+```
+
+#### Dereplication and merging sequences
+Now, we dereplicate the filtered reads in order to infer them in dada file to merge.
+
+```{r Dereplication & Inference , eval = F}
+mergers <- vector("list", length(sample_names))
+names(mergers) <- sample_names
+for(sam in sample_names) {
+  cat("Processing:", sam, "\n")
+  derepFs <- derepFastq(filt_R1[[sam]])
+  ddF <- dada(derepFs, err=errF, multithread=TRUE)
+  derepRs <- derepFastq(filt_R2[[sam]])
+  ddR <- dada(derepRs, err=errR, multithread=TRUE)
+  merger <- mergePairs(ddF, derepFs, ddR, derepRs)
+  mergers[[sam]] <- merger
+}
+
+rm(derepFs); rm(derepRs)
+```
+
+Now, we can construct our sequence table "seqtab" and remove chimeras. It is recommandable to track the reads through the pipeline process
+```{r construct sequence table & chimeras removing, eval = F}
+seqtab <- makeSequenceTable(mergers)
+row.names(seqtab) = sample_names
+dim(seqtab)
+table(nchar(getSequences(seqtab)))
+
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+sum(seqtab.nochim)/sum(seqtab)
+saveRDS(seqtab.nochim, paste0(dir_filtered ,"seqtab.nochim.rds"))
+
+# ____ Track reads through the pipeline ----
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(mergers, getN), rowSums(seqtab), rowSums(seqtab.nochim))
+colnames(track) <- c("input", "filtered", "denoised", "merged", "tabled", "nonchim")
+rownames(track) <- sample_names
+head(track)
+save(track, file = paste0(dir_filtered, "track_343F-784R.RData")
+```
+
+***
+#### Taxonomy assignment
+
+From the SILVA ref files previously deposited in the **dir_refdb** folder, assign the sequence tables
+```{r Tax assignment, eval = F}
+path_reference_db <- paste0(dir_refdb, "/silva_nr_v138_train_set.fa.gz")
+path_species_db   <- paste0(dir_refdb, "/silva_species_assignment_v138.fa")
+taxaRC <- assignTaxonomy(seqtab.nochim, path_reference_db, tryRC=TRUE)
+taxaSp <- addSpecies(taxaRC, path_species_db) # This step can be very long
+
+taxa.print <- taxaSp # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+```
+
+### Phyloseq creation
+Now you can create your phyloseq object with your filtered and assigned sequences. 
+
+```{r phyloseq_creation , eval= F}
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE),tax_table(taxaSp)) 
+dna <- Biostrings::DNAStringSet(taxa_names(ps))
+names(dna) <- taxa_names(ps)
+ps <- merge_phyloseq(ps, dna)
+taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+ps
+save(ps, file = paste0(dir_filtered, "ps.RData"))
+```
+
+> Free r stack memory in order to pursue the analysis. Don't forget to reload all the library packages and reassign the pathways
+
+#### Environmental data table merging
+
+The envdata is constituted of the sampling data from the **AS_data** previously created.
+This step is necessary to homogenize the names of the phyloseq object with the envdata.
+First, change the ID names to be congruent with the names of the sequences.
+
+```{r Order the names , eval = F}
+AS_data <- read.table(file = paste0(dir_dataset, "AS_data.txt"), sep ="\t", header = T)
+AS_data$ID <- str_replace_all(AS_data$ID,
+                                        c("MS." = "MS-","MC." = "MC-"))
+AS_data$ID <- paste0(AS_data$ID , "-G")
+
+env_dat <- AS_data %>% filter(ID %in% sample_names(ps))
+env_dat <- sample_data(env_dat)
+sample_names(env_dat) <- env_dat$ID
+
+sort(sample_names(env_dat)) == sort(sample_names(ps))
+```
+
+Now that the seqtab and the envdata are corresponding,merge them into phyloseq object.
+
+```{r Merge envdata and phyloseq, eval=F}
+ps1 <- merge_phyloseq(ps, env_dat)
+ps1
+save(ps1, file = paste0(dir_filtered, "ps1.RData"))
+```
+
+Plot the sample minimum ASV 
+```{r sample minimum ASV , eval = T, fig.align='center'}
+load(file = paste0(dir_filtered, "ps1.RData"))
+
+paste0("The minimum sample sum of the dataset is ",min(rowSums(ps1@otu_table@.Data)))
+readsumsdf = data.frame(nreads = sort(taxa_sums(ps1),TRUE), sorted = 1:ntaxa(ps1), type = "ASVs")
+readsumsdf = rbind(readsumsdf, data.frame(nreads = sort(sample_sums(ps1), TRUE), sorted = 1:nsamples(ps1), type = "Samples"))
+p = ggplot(readsumsdf, aes(x = sorted, y = nreads)) + geom_bar(stat = "identity")
+p + ggtitle("Total number of reads") + scale_y_log10() + facet_wrap(~type, 1, scales = "free")
+```
+
+### Normalization and calibration
+
+Filter the ps1 to only keep the **Prokaryotes**
+
+```{r Prokaryotes_selection, eval = F}
+ps_proka <-  subset_taxa(ps1, Kingdom %in% c("Archaea", "Bacteria") & 
+                           Order != "Chloroplast" & 
+                           Family != "Mitochondria")
+save(ps_proka, file = paste0(dir_filtered,"ps_proka.RData"))
+```
+
+Normalization of all samples at 10 180 sequences (*i.e.,* the minimum sample sum of the dataset) for a final dataset constituted by 397 020 sequences.
+
+
+
+> Each time the function *rarefy_even_depth()* is ran, it randomly creates a new rarefies phyloseq with the sequences entered in the function. That means that with the same function and argument, the *ps_rff* will be with the same length (same number of sequences) but might be different in term of quality of sequences (not the same number of ASVs).
+
+```{r normalization function, eval = T, warning=FALSE, message = F}
+load(file = paste0(dir_filtered,"ps_proka.RData"))
+paste0("The minimum sample sum for the prokaryote sequences is ",min(rowSums(ps_proka@otu_table@.Data)))
+ps_rff <- prune_samples(sample_sums(ps_proka) >= min(sample_sums(ps_proka)) , ps_proka) # normalized at 10180 seq/sample
+ps_rff <- rarefy_even_depth(ps_proka, sample.size = min(sample_sums(ps_proka)))
+cov_rff <- goods(ps_rff@otu_table@.Data)
+paste0("The coverage after normalization is ", round(mean(cov_rff$goods),2),"% +- " ,round(sd(cov_rff$goods),2))
+paste0("The ratio between the initial set and the normalized data ",round(taxa_sums(ps_rff) %>% names() %>% length() / taxa_sums(ps_proka) %>% names() %>% length(), 2), "%")
+tax_table(ps_rff) <- cbind(tax_table(ps_rff),"ASV"= tax_table(ps_rff)) # Add a new colomun with the ASV Id
+#save(ps_rff, file = paste0(dir_dataset,"ps_rff.RData")) # If you run and save the ps_rff each time, your file will change and the further analyses too (even if slightly).  
+```
+
+> To be sure that the minimal abundance of the data set is enough to capture all the diversity, we use the function **ggrare()** 
+
+```{r ggrare function, eval = T}
+ggrare <- function(physeq_object, step = 10, label = NULL, color = NULL, plot = TRUE, parallel = FALSE, se = TRUE) {
+  x <- methods::as(phyloseq::otu_table(physeq_object), "matrix")
+  if (phyloseq::taxa_are_rows(physeq_object)) { x <- t(x) }
+## This script is adapted from vegan `rarecurve` function
+  tot <- rowSums(x)
+  S <- rowSums(x > 0)
+  nr <- nrow(x)
+  rarefun <- function(i) {
+    cat(paste("rarefying sample", rownames(x)[i]), sep = "\n")
+    n <- seq(1, tot[i], by = step)
+    if (n[length(n)] != tot[i]) {
+      n <- c(n, tot[i])
+    }
+    y <- vegan::rarefy(x[i, ,drop = FALSE], n, se = se)
+    if (nrow(y) != 1) {
+      rownames(y) <- c(".S", ".se")
+      return(data.frame(t(y), Size = n, Sample = rownames(x)[i]))
+    } else {
+      return(data.frame(.S = y[1, ], Size = n, Sample = rownames(x)[i]))
+    }
+  }
+  if (parallel) {
+    out <- parallel::mclapply(seq_len(nr), rarefun, mc.preschedule = FALSE)
+  } else {
+    out <- lapply(seq_len(nr), rarefun)
+  }
+  df <- do.call(rbind, out)
+  # Get sample data
+  if (!is.null(phyloseq::sample_data(physeq_object, FALSE))) {
+    sdf <- methods::as(phyloseq::sample_data(physeq_object), "data.frame")
+    sdf$Sample <- rownames(sdf)
+    data <- merge(df, sdf, by = "Sample")
+    labels <- data.frame(x = tot, y = S, Sample = rownames(x))
+    labels <- merge(labels, sdf, by = "Sample")
+  }
+  # Add, any custom-supplied plot-mapped variables
+  if ( length(color) > 1 ) {
+    data$color <- color
+    names(data)[names(data) == "color"] <- deparse(substitute(color))
+    color <- deparse(substitute(color))
+  }
+  if ( length(label) > 1 ) {
+    labels$label <- label
+    names(labels)[names(labels) == "label"] <- deparse(substitute(label))
+    label <- deparse(substitute(label))
+  }
+  p <- ggplot2::ggplot(data = data,
+                       ggplot2::aes_string(x = "Size",
+                                           y = ".S",
+                                           group = "Sample",
+                                           color = color))
+  p <- p + ggplot2::labs(x = "Sequence Sample Size", y = "Species Richness")
+  if (!is.null(label)) {
+    p <- p + ggplot2::geom_text(data = labels,
+                                ggplot2::aes_string(x = "x",
+                                                    y = "y",
+                                                    label = label,
+                                                    color = color),
+                       size = 4, hjust = 0)
+  }
+  p <- p + ggplot2::geom_line()
+  if (se) { ## add standard error if available
+    p <- p +
+      ggplot2::geom_ribbon(ggplot2::aes_string(ymin = ".S - .se",
+                                               ymax = ".S + .se",
+                                               color = NULL,
+                                               fill = color),
+                           alpha = 0.2)
+  }
+  if (plot) {
+    plot(p)
+  }
+  invisible(p)
+}
+```
+
+```{r ggrare curve, eval=T, message=FALSE, warning=FALSE, results='hide', fig.height= 5, fig.width=10}
+load(file = paste0(dir_dataset,"ps_rff.RData"))
+ggrare(ps_rff, step = 500,  label = "ID", se = F, color = "status", plot = F) + 
+  theme_bw() +
+  scale_color_manual(values = c("darkblue" , "darkred"), 
+                     labels=c('Low-aggregation', 'High-aggregation')) +
+  theme(axis.title = element_text(family = "serif", size = 12), 
+        axis.text = element_text(family = "serif"), 
+        axis.text.x = element_text(family = "serif",size = 12), 
+        axis.text.y = element_text(family = "serif",size = 12), 
+        axis.line = element_line(size = 0), 
+        panel.background = element_blank(),
+        plot.title = element_text(family = "serif"),
+        legend.text = element_text(size = 12,  family = "serif"), 
+        legend.title = element_text(size = 12, family = "serif"))+
+  labs(colour = "Aggregation levels")
+```
+
+#### Phylogenetic calibration ----
+
+Because we used phylogenetic indices that take into account the phylogenetic distance between taxa, we need to calibrate and insert the phhylogenetic tree of the phyloseq object. To do that, create the **ps_rff.fasta** (a note file that contains all the ASVs with their successive nucleotidic sequences).
+
+```{r phylogenetic calibration, eval = F}
+Biostrings::writeXStringSet(ps_rff@refseq, file = "ps_rff.fasta") #create fasta file
+```
+
+You also need the **ps_rff.biom** file which is the output format when you proceed your librairies in the Qiime2 pipeline.
+
+> Here is a function that allows to transform the otu matrix in a biom file.
+```{r biome fun, eval = F}
+make_biom <- function(data, sample_metadata=NULL, observation_metadata=NULL, id=NULL, matrix_element_type="int"){
+  # The observations / features / OTUs / rows "meta" data table
+  if(!is.null(observation_metadata)){
+    rows = mapply(list, SIMPLIFY=FALSE, id=as.list(rownames(data)),
+                  metadata=alply(as.matrix(observation_metadata), 1, .expand=FALSE, .dims=TRUE))
+  } else {
+    rows = mapply(list, id=as.list(rownames(data)), metadata=NA, SIMPLIFY=FALSE)
+  }
+  # The samples / sites / columns "meta" data table
+  if(!is.null(sample_metadata)){
+    columns = mapply(list, SIMPLIFY=FALSE, id=as.list(colnames(data)),
+                     metadata=alply(as.matrix(sample_metadata), 1, .expand=FALSE, .dims=TRUE)) 
+  } else {
+    columns = mapply(list, id=as.list(colnames(data)), metadata=NA, SIMPLIFY=FALSE)
+  }
+  # Convert the contingency table to a list
+  datalist = as.list(as.data.frame(as(t(data), "matrix")))
+  names(datalist) <- NULL
+  # Define the list, instantiate as biom-format, and return
+  # (Might eventually expose some of these list elements as function arguments)
+  format_url = "http://biom-format.org"
+  return(biom(list(id=id,
+                   format = "Biological Observation Matrix 1.0.0",
+                   format_url = format_url,
+                   type = "OTU table",
+                   generated_by = sprintf("biomformat %s", packageVersion("biomformat")),
+                   date = as.character(Sys.time()),
+                   matrix_type = "dense",
+                   matrix_element_type = matrix_element_type,
+                   shape = dim(data),
+                   rows = rows,
+                   columns = columns,
+                   data = datalist)
+  ))
+}
+```
+
+Write the biom file and run both the fasta and the biom files in the [Galaxy server](https://usegalaxy.org). The multiple alignment of the sequences was provided with the MAFFT program ([Katoh, 2002](https://doi:10.1093/nar/gkf436)) and we inferred the phylogenetic tree with the FastTree 2 tool ([Price et al., 2010](https://doi:10.1371/journal.pone.0009490)) and Phangorn package v2.8.1 ([Schliep, 2011](https://doi:10.1093/bioinformatics/btq706)).
+
+```{r biom creation, eval = F}
+otu <-t(as(otu_table(ps_rff),"matrix")) # 't' to transform if taxa_are_rows=FALSE
+biom <- make_biom(data= otu)
+write_biom(biom,"biom") #create biom file
+#Run both files in Galaxy Frogs to construct the phylogenetic tree
+```
+
+The output delivered by the server in a newick file that migh be include now in the phyloseq object.
+> Note that this step can be made with the prokaryotic phyloseq object but the process will be longer. It can be an heavy task to run depending on the weight of your fasta file. Here is a very small dataset of sequences. 
+
+```{r merge tree, eval =F}
+tree <- ape::read.tree(paste0(dir_dataset, "tree.nwk"))
+ps_rff <- merge_phyloseq(ps_rff, tree)
+save(ps_rff, file = paste0(dir_dataset,"ps_rff.RData"))
+```
+
+### OTUs clustering
+This step allows to quickly obtain OTU with 88%, 93% and 97% clustering thresholds and create new phyloseq objects with these forming OTUs. See 
+
+```{r OTUs creation, eval =F}
+nproc <- 4 # set to number of cpus/processors to use for the clustering
+dna <- refseq(ps_rff)
+## Find clusters of ASVs to form the new OTUs
+aln <- DECIPHER::AlignSeqs(dna, processors = nproc)
+d <- DECIPHER::DistanceMatrix(aln, processors = nproc)
+
+clusters <- DECIPHER::TreeLine(
+  myDistMatrix=d,
+  method = "complete",
+  cutoff = c(0.12, 0.07,0.03), # 88%, 93% and 97% OTU clustering
+  type = "clusters",
+  processors = nproc)
+
+## Use dplyr to merge the columns of the seqtab matrix for ASVs in the same OTU
+# prep by adding sequences to the `clusters` data frame
+clusters <- clusters %>%  add_column(sequence = asv_sequences)
+ps_97 <- merge_taxa_vec(
+  ps_rff, 
+  group = clusters$cluster0_03complete,
+  tax_adjust = 2
+)
+
+ps_93 <- merge_taxa_vec(
+  ps_rff, 
+  group = clusters$cluster0_07complete,
+  tax_adjust = 2
+)
+
+ps_88 <- merge_taxa_vec(
+  ps_rff, 
+  group = clusters$cluster0_12complete,
+  tax_adjust = 2
+)
+
+save(ps_97,ps_93, ps_88, file = paste0(dir_dataset, "ps_OTUs.RData"))
+```
+
+### Microbial composition
+
+Create a data table **physeq** from the phyloseq object that will be used to construct barplot
+
+```{r physeq, eval= T, message = FALSE, warning=FALSE, results = 'hide'}
+load(file = paste0(dir_dataset, "ps_rff.RData"))
+physeq <- ps_rff %>%
+  tax_glom(taxrank = "ASV") %>%                     # agglomerate at phylum level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% # Transform to rel. abundance
+  psmelt() 
+
+physeq$ID <- factor(physeq$ID, levels = unique(arrange(physeq, physeq$AS72)$ID))
+physeq$Abundance <- physeq$Abundance/sum(physeq$Abundance) * 100 # To obtain %
+write.table(physeq, file = paste0(dir_dataset, "physeq.txt"), sep ="\t", row.names = F)
+```
+
+Create two barplots for both microbial Phyla and Families.
+
+#### Phylum composition
+
+```{r Phylum compo, eval = T, results='hide', message=FALSE, warning=FALSE, fig.height= 7, fig.width=14}
+physeq <- read.table(file = paste0(dir_dataset, "physeq.txt"), sep ="\t", header = T)
+
+compo_phylum <- physeq %>%
+  group_by(Phylum) %>%
+  summarise(Prop_phylum = sum(Abundance)) %>%
+  arrange(desc(Prop_phylum))
+
+physeq$Phylum <- factor(physeq$Phylum, levels = rev(as.character(compo_phylum$Phylum)))
+
+Fig_phylum <- physeq %>%
+  group_by(ID, Phylum) %>%
+  summarise(Prop_phylum = sum(Abundance)) %>%
+  ggplot(aes(x = ID, y = Prop_phylum, fill = Phylum)) + 
+  geom_bar(stat="identity", position="fill", color = "black",linewidth = 0.5) + 
+  ylab("Relative Abundance") +
+  scale_y_continuous(expand = c(0,0)) + #remove the space below the 0 of the y axis in the graph
+  theme_bw() +
+  scale_fill_manual(values= rev(c("dodgerblue4",
+                                  "darkolivegreen",
+                                  "darkred",
+                                  "orange",
+                                  "magenta",
+                                  "yellow",
+                                  "gray")))+
+  theme(axis.line = element_line(size = 0), 
+        panel.background = element_blank(), 
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(), 
+        axis.title = element_text(family = "serif",size = 18), 
+        axis.text = element_text(size = 14), 
+        axis.text.x = element_text(size = 12, family = "serif", angle = 45,hjust = 1), 
+        axis.text.y = element_text(family = "serif", size = 14),
+        axis.title.x =  element_text(size = 0),
+        legend.text = element_text(size = 15,  family = "serif"), 
+        legend.title = element_text(size = 18, family = "serif"))+
+  guides(fill=guide_legend(ncol =1))+
+  labs(fill = "Microbial Phylum")
+Fig_phylum
+
+pdf(file = paste0(dir_graph,"compo_Phylum.pdf"), he = 7 , wi = 14)
+Fig_phylum
+dev.off()
+
+```
+
+
+#### Family composition
+```{r family compo, eval = T, results='hide', warning=FALSE, message=FALSE, fig.height= 7, fig.width=14}
+physeq <- read.table(file = paste0(dir_dataset, "physeq.txt"), sep ="\t", header = T)
+compo_family <- physeq %>%
+  group_by(Phylum, Family) %>%
+  summarise(Prop_family = sum(Abundance)) %>%
+  arrange(desc(Prop_family)) # arrange by prop in order to select then the most abundant
+
+physeq$Family <- factor(physeq$Family, levels = rev(as.character(compo_family$Family)))
+rev(levels(physeq$Family))[1:20] # Here, we select the 20 most abundant families
+physeq$Family <- fct_other(physeq$Family, keep = rev(levels(physeq$Family))[1:20])
+
+# Select family colors depending on the belonging phylum
+counts <- compo_family[1:20,] %>% count(Phylum)
+fam_col <- cbind(compo_family[1:20,] %>% 
+                   arrange(Phylum, Prop_family), 
+                 "Colors" = c("bisque3","orange", #for actinobacteria
+                              "darkred","darkmagenta" ,"firebrick", # for bacteroidetes
+                              "green","darkgreen", "darkolivegreen1","darkolivegreen" , # for firmicutes
+                              "darkslategray4","darkslategray3","cadetblue1","darkturquoise","turquoise", #for proteo, melt the gradient
+                              "cyan","cornflowerblue","dodgerblue", "blue","darkblue","dodgerblue4")) 
+
+barplot <- physeq %>%
+  group_by(ID, Family) %>%
+  summarise(Prop_family = sum(Abundance)) 
+barplot <- left_join(barplot, fam_col %>% as.data.frame() %>% select(Family,Colors), by = "Family")
+barplot$Colors <- fct_explicit_na(barplot$Colors, na_level = "dimgray")
+barplot$Family <- factor(barplot$Family, levels = c(fam_col$Family, "Other"))
+barplot$Colors <- factor(barplot$Colors, levels = c(fam_col$Colors, "dimgray"))
+barplot$ID <- factor(barplot$ID, levels = unique(arrange(physeq, physeq$Total)$ID))
+
+Fig_fam <- barplot %>%
+  ggplot(aes(x = ID, y = Prop_family, fill = Family)) + 
+  geom_bar(stat="identity", position="fill",color = "black", linewidth = 0.5) + 
+  ylab("Relative Abundance") +
+  scale_y_continuous(expand = c(0,0)) + #remove the space below the 0 of the y axis in the graph
+  theme_bw() +
+  scale_fill_manual(values= levels(barplot$Colors))+
+  theme(axis.line = element_line(size = 0), 
+        panel.background = element_blank(), 
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(), 
+        axis.title = element_text(family = "serif",size = 18), 
+        axis.text = element_text(size = 14), 
+        axis.text.x = element_text(size = 12, family = "serif", angle = 45,hjust = 1), 
+        axis.text.y = element_text(family = "serif", size = 14),
+        axis.title.x =  element_text(size = 0),
+        legend.text = element_text(size = 15,  family = "serif"), 
+        legend.title = element_text(size = 18, family = "serif"))+
+  guides(fill=guide_legend(ncol =1))+
+  labs(fill = "Microbial Family")
+Fig_fam
+
+pdf(file = paste0(dir_graph, "Fig_family.pdf"), he = 7 , wi = 14)
+Fig_fam
+dev.off()
+```
+
+### LEfSe analysis
+
+We want to determine if it does exist discriminant microbial taxa that can be considered as candidate to be manipulative microorganisms. 
+In that way, we run a Linear Effect Size discriminant analysis in order to discriminate taxa that are statistically more prevalent and abundant in an aggregation status
+
+```{r lefse, eval = F}
+load(paste0(dir_dataset, "ps_rff.RData"))
+samp_data <- ps_rff %>% sample_data() %>% as.data.frame()
+
+otu_asv <- cbind(rownames(ps_rff %>% otu_table() %>% as.data.frame() %>% t()),
+                 ps_rff %>% otu_table() %>% as.data.frame() %>% t())
+colnames(otu_asv) <- c("Status", samp_data$status)
+write.table(otu_asv, file = paste0(dir_dataset, "lefse_tab_asv.txt"), sep = "\t", row.names = F)
+```
+
+> Run the LEfSe in the [Galaxy server](https://usegalaxy.org). Download the output of the analysis in the "dir_dataset" and call it "LDA_Effect_Size_ASV"
+
+```{r result lefse, eval = F}
+LDA_Effect_Size_ASV <- read.delim(paste0(dir_dataset, "LDA_Effect_Size_ASV"), header=FALSE)
+
+LDA_result <- cbind(LDA_Effect_Size_ASV, "Clustering" = rep("100%")) %>%
+  filter(V3 %in% c("High", "Low"))
+colnames(LDA_result) <- c("ASV","LDA_res" , "Discriminant" , "LDA_res2" , "p-value", "Clustering")
+LDA_result <- left_join(LDA_result, ps_rff %>% subset_taxa(ASV %in% LDA_result$ASV) %>% tax_table() %>% as.data.frame(), by = "ASV")
+LDA_result$Taxonomy <- paste(LDA_result$ASV, LDA_result$Genus, LDA_result$Class, sep = "|")
+write.table(LDA_result, file=paste0(dir_dataset, "LDA_result.txt"), sep="\t", row.names=F, col.names=T)
+
+
+tab_asv <- left_join(
+  left_join(  
+    cbind("Status" = colnames(otu_asv), 
+          otu_asv %>% 
+            t() %>%
+            data.frame() %>%
+            select(LDA_result$ASV) %>%
+            mutate_if(is.character, as.numeric)) %>%
+      pivot_longer(!Status, names_to = "ASV", values_to = "Abundance") %>%
+      group_by(ASV, Status) %>%
+      summarise(Abundance = sum(Abundance)), 
+    cbind("Status" = colnames(otu_asv), 
+          otu_asv %>% 
+            t() %>%
+            data.frame() %>%
+            select(LDA_result$ASV) %>%
+            mutate_if(is.character, as.numeric)) %>%
+      pivot_longer(!Status, names_to = "ASV", values_to = "Abundance") %>%
+      filter(Abundance != 0) %>%
+      count(ASV, Status, name = "Occurrence"),
+    by = c("ASV", "Status")),
+  LDA_result, 
+  by = "ASV")
+
+write.table(tab_asv, file = paste0(dir_dataset, "tab_asv.txt"), sep ="\t", row.names = F)
+```
+
+
+```{r r result lefse, eval = T, results='hide', warning=FALSE, message=FALSE, fig.width= 4, fig.height=10}
+tab_asv <- read.table(paste0(dir_dataset, "tab_asv.txt"), sep ="\t", header = T)
+
+tab_asv$Status <- str_replace_all(tab_asv$Status, c("Low" = "Low-aggregation",
+                                                    "High" = "High-aggregation"))
+tab_asv$Occurrence <- replace_na(tab_asv$Occurrence, 0)
+tab_asv[tab_asv$Status == "Low-aggregation",]$Occurrence <- tab_asv[tab_asv$Status == "Low-aggregation",]$Occurrence*-1
+tab_asv <- tab_asv %>% arrange(desc(Discriminant))
+tab_asv$Taxonomy <- factor(tab_asv$Taxonomy, levels = tab_asv$Taxonomy %>% unique())
+tab_asv$Discriminant <- factor(tab_asv$Discriminant, levels = c("Low", "High"))
+tab_asv$Status <- factor(tab_asv$Status, levels = c("Low-aggregation", "High-aggregation"))
+
+ggplot(tab_asv,aes(y = Taxonomy, x = Occurrence, fill = Status ,alpha = log(Abundance))) +
+  geom_bar(stat = "identity", position = "identity",color = "black",linewidth = 0.3) +
+  scale_x_continuous(limits = c(-20,19))+
+  xlab("Number of females hosting the discriminant")+
+  scale_fill_manual(values = c("darkblue", "darkred"))+
+  theme_bw() +
+  theme(axis.line = element_line(size = 0), 
+        panel.background = element_blank(), 
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(), 
+        axis.title = element_text(family = "serif",size = 16), 
+        axis.text = element_text(size = 16), 
+        axis.text.x = element_text(size = 16, family = "serif"), 
+        axis.text.y = element_text(family = "serif", size = 16),
+        axis.title.x =  element_text(size = 16),
+        axis.title.y =  element_text(size = 0),
+        legend.text = element_text(size = 16,  family = "serif"), 
+        legend.title = element_text(size = 18, family = "serif"))+
+  guides(fill=guide_legend(ncol =1))+
+  labs(fill = "Aggregation level", 
+       alpha = "Abundance (log)", 
+       title = "ASV Discriminants")
+
+```
+
+
+It exists 10 ASVs discriminants but they are actually in very low occurrence in the samples with strong variation in their abundance. Indeed, it does not exist any exclusive that are present in all less- or high-aggregation females.
+
+
+### Diversity calculs
+
+We then calculated the alpha diversity and beta-diversity  of the gut microbiota of the 39 tested females.
+
+#### Alpha diversity 
+
+Regarding the alpha diversity, we used the direct observed richness as a proxy for the qualitative taxonomic richness and the Shannon entropy for its quantitative equivalent. Their respective equivalents that include the phylogenetic relatedness between microbial sequences are the Faith and the Hill1 (q = 1) indices ([Chao et al., 2010](https://doi:10.1098/rstb.2010.0272)). 
+
+
+```{r alpha, eval = T}
+load(file = paste0(dir_dataset ,"ps_rff.RData"))
+
+alpha_data <- left_join(
+  cbind("ID" = sample_names(ps_rff),
+        "Observed.richness" = pd(samp= ps_rff@otu_table , tree = ps_rff@phy_tree , include.root =  T)$SR,
+        estimate_richness(ps_rff , measures = c("Shannon")),
+        "Faith" = pd(samp= ps_rff@otu_table , tree = ps_rff@phy_tree , include.root =  T)$PD,
+        "Hill1" = hill_phylo(comm = ps_rff@otu_table, tree = ps_rff@phy_tree, q = 1)) %>%
+    as.data.frame(),
+  ps_rff %>% sample_data() %>% as.data.frame(),
+  by = "ID")
+
+write.table(alpha_data, file = paste0(dir_dataset, "alpha_data.txt"), sep = "\t", row.names = F)
+```
+
+
+#### Beta diversity 
+
+Preparation of the matrix and the taxonomy table to calcul the distances between sample pairs.
+```{r beta prep, eval = T}
+load(paste0(dir_dataset, "ps_rff.RData"))
+samp_data <- ps_rff %>% sample_data() %>% as.data.frame()
+samp_data$status <- str_replace_all(samp_data$status , 
+                                    c("Low" = "Low-aggregation",
+                                      "High" = "High-aggregation"))
+samp_data$status <- factor(samp_data$status, levels = c("Low-aggregation", "High-aggregation"))
+otu_table <- ps_rff@otu_table %>% as.data.frame()
+tax_table <- ps_rff@tax_table %>% as.data.frame()
+write.table(otu_table, file = paste0(dir_dataset, "otu_table.txt"), sep = "\t", row.names = T, col.names = T)  
+write.table(tax_table, file = paste0(dir_dataset, "tax_table.txt"), sep = "\t", row.names = T, col.names = T)
+```
+
+For beta-diversity, we used a taxonomic qualitative distance with the Jaccard metric that is used on a binary matrix with ASVs presence/absence by sample while its quantitative equivalent Bray-Curtis is calculated on the relative abundances of ASVs in each sample. We also used their phylogenetic equivalents with the Unifrac metrics for qualitative (Unweighted) and quantitative (Weighted) distances ([Lozupone and Knight, 2005](https://doi:10.1128/AEM.71.12.8228-8235.2005),[Yang et al., 2021](https://doi:10.1016/j.csbj.2021.07.009)). 
+
+```{r distance calcul, eval = T, message=F, results=F, warning=F}
+otu.jacc <- vegdist(otu_table, method = "jaccard")
+otu.bc <- vegdist(otu_table, method = "bray")
+otu.uu <- UniFrac(ps_rff, weighted = F, normalized=F, parallel = F, fast=T)
+otu.wu <- UniFrac(ps_rff, weighted = T, normalized=F, parallel = F, fast=T)
+```
+
+To analyse the variability in microbial assemblies between low- and high-aggregation hosts, we assessed the dispersion for all metrics (i.e., distance of each sample from the centroïd among the low and high-aggregation levels) using the betadisper function from the **vegan** package ([Oksanen et al., 2022](https://CRAN.R-project.org/package=vegan)).
+
+```{r dispersion, eval = T, message=F, results=F, warning=F}
+disp.jacc <- betadisper(otu.jacc, samp_data$status)
+sig.jacc <- permutest(disp.jacc)
+Distances.jacc <- disp.jacc$distances
+disp.bc <- betadisper(otu.bc, samp_data$status)
+sig.bc <- permutest(disp.bc)
+Distances.bc <- disp.bc$distances
+disp.uu <- betadisper(otu.uu, samp_data$status)
+Distances.uu <- disp.uu$distances
+sig.uu <- permutest(disp.uu)
+disp.wu <- betadisper(otu.wu, samp_data$status)
+sig.wu <- permutest(disp.wu)
+Distances.wu <- disp.wu$distances
+
+alpha_data <- read.table(file = paste0(dir_dataset, "alpha_data.txt"), sep = "\t", header = T, allowEscapes = )
+
+micro_div_data <- cbind(alpha_data %>% select(ID:Hill1),
+                       "Jacc.dispersion" = Distances.jacc,
+                       "BC.dispersion" = Distances.bc,
+                       "UU.dispersion" = Distances.uu,
+                       "WU.dispersion" = Distances.wu, 
+                       alpha_data %>% select(sampling_date:weight))
+
+write.table(micro_div_data, file = paste0(dir_dataset, "micro_div_data.txt"), sep ="\t", row.names = F)
+
+micro_div_data_longer <- micro_div_data %>% 
+  pivot_longer(cols = Observed.richness:WU.dispersion, names_to = "Variable", values_to = "Value") 
+write.table(micro_div_data_longer, file = paste0(dir_dataset, "micro_div_data_longer.txt"), sep ="\t", row.names = F)
+```
+
+
+### Statistical tests 
+#### T-test
+We used these metrics in eight t-tests and four PERMANOVAs to compare the alpha diversity, microbial variability, and microbial composition between females with high or low AS.
+
+Before performing t-tests, check the variance homogeneity. 
+
+```{r F test on alpha, eval = T}
+micro_div_data <- read.table(file = paste0(dir_dataset, "micro_div_data.txt"), sep ="\t",header =T )
+# Alpha indices
+paste0("Homogeneity of richness between status p-value = ", round(var.test(Observed.richness~ status,micro_div_data)$p.value, 2))
+paste0("Homogeneity of Shannon between status p-value = ", round(var.test(Shannon~status,micro_div_data)$p.value, 2))
+paste0("Homogeneity of Faith between status p-value = ", round(var.test(Faith~status,micro_div_data)$p.value, 2))
+paste0("Homogeneity of Hill1 between status p-value = ", round(var.test(Hill1~status,micro_div_data)$p.value, 2))
+# Beta indices
+paste0("Homogeneity of Jacc dispersion between status p-value = ", round(var.test(Jacc.dispersion~ status,micro_div_data)$p.value, 2))
+paste0("Homogeneity of BC dispersion between status p-value = ", round(var.test(BC.dispersion~ status,micro_div_data)$p.value, 2))
+paste0("Homogeneity of UU dispersion between status p-value = ", round(var.test(UU.dispersion~ status,micro_div_data)$p.value, 2))
+paste0("Homogeneity of WU dispersion between status p-value = ", round(var.test(WU.dispersion~ status,micro_div_data)$p.value, 2))
+
+```
+
+and proceed to t-test to compare the alpha and beta between levels of aggregation
+
+```{r t tests, eval = T}
+micro_div_data <- read.table(file = paste0(dir_dataset, "micro_div_data.txt"), sep ="\t",header =T )
+# Alpha t test
+paste0("Variance comparisions of richness between status: t= ",round(t.test(Observed.richness~status,micro_div_data, var=T)$statistic,2), "; df= ", t.test(Observed.richness~status,micro_div_data, var=T)$parameter,"; p-value= ",round(t.test(Observed.richness~status,micro_div_data, var=T)$p.value))
+paste0("Variance comparisions of Shannon between status: t= ",round(t.test(Shannon~status,micro_div_data, var=T)$statistic,2), "; df= ", t.test(Shannon~status,micro_div_data, var=T)$parameter,"; p-value= ",round(t.test(Shannon~status,micro_div_data, var=T)$p.value))
+paste0("Variance comparisions of Faith between status: t= ",round(t.test(Faith~status,micro_div_data, var=T)$statistic,2), "; df= ", t.test(Faith~status,micro_div_data, var=T)$parameter,"; p-value= ",round(t.test(Faith~status,micro_div_data, var=T)$p.value))
+paste0("Variance comparisions of Hill1 between status: t= ",round(t.test(Hill1~status,micro_div_data, var=T)$statistic,2), "; df= ", t.test(Hill1~status,micro_div_data, var=T)$parameter,"; p-value= ",round(t.test(Hill1~status,micro_div_data, var=T)$p.value))
+
+# Beta divesity
+paste0("Variance comparisions of Jacc.dispersion between status: t= ",round(t.test(Jacc.dispersion~status,micro_div_data, var=T)$statistic,2), "; df= ", t.test(Jacc.dispersion~status,micro_div_data, var=T)$parameter,"; p-value= ",round(t.test(Jacc.dispersion~status,micro_div_data, var=T)$p.value))
+paste0("Variance comparisions of BC.dispersion between status: t= ",round(t.test(BC.dispersion~status,micro_div_data, var=T)$statistic,2), "; df= ", t.test(BC.dispersion~status,micro_div_data, var=T)$parameter,"; p-value= ",round(t.test(BC.dispersion~status,micro_div_data, var=T)$p.value))
+paste0("Variance comparisions of UU.dispersion between status: t= ",round(t.test(UU.dispersion~status,micro_div_data, var=T)$statistic,2), "; df= ", t.test(UU.dispersion~status,micro_div_data, var=T)$parameter,"; p-value= ",round(t.test(UU.dispersion~status,micro_div_data, var=T)$p.value))
+paste0("Variance comparisions of WU.dispersion between status: = ",round(t.test(WU.dispersion~status,micro_div_data, var=F)$statistic,2), "; df= ", t.test(WU.dispersion~status,micro_div_data, var=F)$parameter,"; p-value= ",round(t.test(WU.dispersion~status,micro_div_data, var=F)$p.value)) # welch test because variances were not homogeneous
+```
+
+```{r boxplot , eval = T, results=F, message= FALSE, warning=FALSE, fig.width= 12, fig.height= 9}
+micro_div_data_longer <- read.table(file = paste0(dir_dataset, "micro_div_data_longer.txt"), sep ="\t", header = T)
+micro_div_data_longer$Variable <- factor(micro_div_data_longer$Variable, levels = c("Observed.richness",
+                                                                            "Shannon",
+                                                                            "Faith",
+                                                                            "Hill1",
+                                                                            "Jacc.dispersion",
+                                                                            "BC.dispersion",
+                                                                            "UU.dispersion",
+                                                                            "WU.dispersion"))
+micro_div_data_longer$status <- factor(micro_div_data_longer$status , levels = c("Low", "High"))  
+
+Fig_boxplot <- micro_div_data_longer %>%
+  ggplot(aes(x = status , y = Value, color = status)) +
+  geom_jitter(position = position_jitter(width = .20), alpha = 0.5, size = 3) + 
+  scale_color_manual(values = c("darkblue" , "darkred")) +
+  theme_bw() +
+  geom_boxplot(alpha=0.1, outlier.colour = NA) + 
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size=18, family = "serif"),
+        axis.text = element_text(family = "serif",size = 14),
+        axis.text.x = element_text(family = "serif",size = 18, angle = 0),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text.x = element_text(size=14, family = "serif"),
+        legend.position="none") + 
+  facet_wrap( ~ Variable, nrow=2, ncol = 4, scales = "free") +
+  geom_signif(comparisons = list(c("Low", "High")), 
+              map_signif_level = T, textsize=4, color="black", family = "serif", vjust = 0)
+Fig_boxplot 
+pdf(file = paste0(dir_graph, "fig_boxplot.pdf"), he = 9, wi = 12)
+Fig_boxplot
+dev.off()
+```
+
+#### PERMANOVAs and PCoA
+Finally, we used four PERMANOVAs to test the influence of the aggregation status on the microbial composition
+
+```{r PERMANOVA, eval =T}
+paste0("PERMANOVA on Jaccard distance R2= ", round(adonis2(otu.jacc ~ samp_data$status)$R2[1],2) , "; p-value= ",round(adonis2(otu.jacc ~ samp_data$status)$`Pr(>F)`[1],2))
+paste0("PERMANOVA on BC distance R2= ", round(adonis2(otu.bc ~ samp_data$status)$R2[1],2) , "; p-value= ",round(adonis2(otu.bc ~ samp_data$status)$`Pr(>F)`[1],2))
+paste0("PERMANOVA on UU distance R2= ", round(adonis2(otu.uu ~ samp_data$status)$R2[1],2) , "; p-value= ",round(adonis2(otu.uu ~ samp_data$status)$`Pr(>F)`[1],2))
+paste0("PERMANOVA on WU distance R2= ", round(adonis2(otu.wu ~ samp_data$status)$R2[1],2) , "; p-value= ",round(adonis2(otu.wu ~ samp_data$status)$`Pr(>F)`[1],2))
+```
+
+```{r PCoA, eval = T, results='hide', warning=FALSE, message=FALSE, fig.width= 12, fig.height=12}
+#  *Jaccard 
+pcoa.sub.jacc <- pcoa(otu.jacc)
+pcoa_coord.jacc <- pcoa.sub.jacc$vectors[,1:3]
+hull.jacc <- cbind(pcoa_coord.jacc, samp_data) # Contruction of the table for graphic 
+
+pcoa.jacc <- ggplot() +
+  geom_point(data = hull.jacc, aes(x=Axis.1, y=Axis.2, size = status, color = status), alpha = 0.7, shape = 16) +
+  geom_hline(yintercept=0, colour="lightgrey", linetype = 2) +
+  geom_vline(xintercept=0, colour="lightgrey", linetype = 2) +
+  xlab(paste("PCo1 (", round(pcoa.sub.jacc$values$Relative_eig[1]*100, 1), "%)")) +
+  ylab(paste("PCo2 (", round(pcoa.sub.jacc$values$Relative_eig[2]*100, 1), "%)"))  +
+  theme_bw() +
+  scale_color_manual(values = c("darkblue", "darkred"))+
+  coord_equal() +
+  theme(axis.title.x = element_text(size=14, family = "serif"), # remove x-axis labels
+        axis.title.y = element_text(size=14, family = "serif"), # remove y-axis labels
+        axis.text.x = element_text(size=14, family = "serif"),
+        axis.text.y = element_text(size=14, family = "serif"),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(),  #remove minor-grid labels
+        plot.background = element_blank(),
+        axis.title = element_text(family = "serif", size = 22), 
+        legend.text = element_text(size = 0, family = "serif"),
+        legend.title = element_text(size = 0,family = "serif"))+
+  labs(title = "PCoA on Jaccard distances", 
+       size = "Status", color = "Status")
+
+# * Bray-Curtis 
+pcoa.sub.bc <- pcoa(otu.bc)
+pcoa_coord.bc <- pcoa.sub.bc$vectors[,1:3]
+hull.bc <- cbind(pcoa_coord.bc, samp_data) # Contruction of the table for graphic 
+
+pcoa.bc <- ggplot() +
+  geom_point(data = hull.bc, aes(x=Axis.1, y=Axis.2, size = status, color = status), alpha = 0.7, shape = 16) +
+  geom_hline(yintercept=0, colour="lightgrey", linetype = 2) +
+  geom_vline(xintercept=0, colour="lightgrey", linetype = 2) +
+  xlab(paste("PCo1 (", round(pcoa.sub.bc$values$Relative_eig[1]*100, 1), "%)")) +
+  ylab(paste("PCo2 (", round(pcoa.sub.bc$values$Relative_eig[2]*100, 1), "%)"))  +
+  theme_bw() +
+  scale_color_manual(values = c("darkblue", "darkred"))+
+  coord_equal() +
+  theme(axis.title.x = element_text(size=14, family = "serif"), # remove x-axis labels
+        axis.title.y = element_text(size=14, family = "serif"), # remove y-axis labels
+        axis.text.x = element_text(size=14, family = "serif"),
+        axis.text.y = element_text(size=14, family = "serif"),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(),  #remove minor-grid labels
+        plot.background = element_blank(),
+        axis.title = element_text(family = "serif", size = 22), 
+        legend.text = element_text(size = 0, family = "serif"),
+        legend.title = element_text(size = 0,family = "serif"))+
+  labs(title = "PCoA on Bray-Curtis distances", 
+       size = "Status", color = "Status")
+
+# * Unweighted Unifrac
+pcoa.sub.uu <- pcoa(otu.uu)
+pcoa_coord.uu <- pcoa.sub.uu$vectors[,1:3]
+hull.uu <- cbind(pcoa_coord.uu, samp_data)
+
+pcoa.uu <- ggplot() +
+  geom_point(data = hull.uu, aes(x=Axis.1, y=Axis.2, size = status, color = status), alpha = 0.7, shape = 16) +
+  geom_hline(yintercept=0, colour="lightgrey", linetype = 2) +
+  geom_vline(xintercept=0, colour="lightgrey", linetype = 2) +
+  xlab(paste("PCo1 (", round(pcoa.sub.uu$values$Relative_eig[1]*100, 1), "%)")) +
+  ylab(paste("PCo2 (", round(pcoa.sub.uu$values$Relative_eig[2]*100, 1), "%)"))  +
+  theme_bw() +
+  scale_color_manual(values = c("darkblue", "darkred"))+
+  coord_equal() +
+  theme(axis.title.x = element_text(size=14, family = "serif"), # remove x-axis labels
+        axis.title.y = element_text(size=14, family = "serif"), # remove y-axis labels
+        axis.text.x = element_text(size=14, family = "serif"),
+        axis.text.y = element_text(size=14, family = "serif"),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(),  #remove minor-grid labels
+        plot.background = element_blank(),
+        axis.title = element_text(family = "serif", size = 22), 
+        legend.text = element_text(size = 0, family = "serif"),
+        legend.title = element_text(size = 0,family = "serif"))+
+  labs(title = "PCoA on Unweighted Unifrac distances", 
+       size = "Status", color = "Status")
+
+
+# * Weighted Unifrac 
+pcoa.sub.wu <- pcoa(otu.wu)
+pcoa_coord.wu <- pcoa.sub.wu$vectors[,1:3]
+hull.wu <- cbind(pcoa_coord.wu, samp_data)
+
+pcoa.wu <- ggplot() +
+  geom_point(data = hull.wu, aes(x=Axis.1, y=Axis.2, size = status, color = status), alpha = 0.7, shape = 16) +
+  geom_hline(yintercept=0, colour="lightgrey", linetype = 2) +
+  geom_vline(xintercept=0, colour="lightgrey", linetype = 2) +
+  xlab(paste("PCo1 (", round(pcoa.sub.wu$values$Relative_eig[1]*100, 1), "%)")) +
+  ylab(paste("PCo2 (", round(pcoa.sub.wu$values$Relative_eig[2]*100, 1), "%)"))  +
+  theme_bw() +
+  scale_color_manual(values = c("darkblue", "darkred"))+
+  coord_equal() +
+  theme(axis.title.x = element_text(size=14, family = "serif"), # remove x-axis labels
+        axis.title.y = element_text(size=14, family = "serif"), # remove y-axis labels
+        axis.text.x = element_text(size=14, family = "serif"),
+        axis.text.y = element_text(size=14, family = "serif"),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(),  #remove minor-grid labels
+        plot.background = element_blank(),
+        axis.title = element_text(family = "serif", size = 22), 
+        legend.text = element_text(size = 0, family = "serif"),
+        legend.title = element_text(size = 0,family = "serif"))+
+  labs(title = "PCoA on Weighted Unifrac distances", 
+       size = "Status", color = "Status")
+
+legend <- ggplot() +
+  geom_point(data = hull.wu, aes(x=Axis.1, y=Axis.2, size = status, color = status), alpha = 0.7, shape = 16) +
+  geom_hline(yintercept=0, colour="lightgrey", linetype = 2) +
+  geom_vline(xintercept=0, colour="lightgrey", linetype = 2) +
+  xlab(paste("PCo1 (", round(pcoa.sub.wu$values$Relative_eig[1]*100, 1), "%)")) +
+  ylab(paste("PCo2 (", round(pcoa.sub.wu$values$Relative_eig[2]*100, 1), "%)"))  +
+  theme_bw() +
+  scale_color_manual(values = c("darkblue", "darkred"))+
+  coord_equal() +
+  theme(axis.title.x = element_text(size=12, family = "serif"), # remove x-axis labels
+        axis.title.y = element_text(size=12, family = "serif"), # remove y-axis labels
+        axis.text.x = element_text(size=12, family = "serif"),
+        axis.text.y = element_text(size=12, family = "serif"),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(),  #remove minor-grid labels
+        plot.background = element_blank(),
+        axis.title = element_text(family = "serif", size = 22), 
+        legend.text = element_text(size = 16, family = "serif"),
+        legend.title = element_text(size = 16,family = "serif"))+
+  labs(title = "PCoA on Weighted Unifrac distances", 
+       size = "Status", color = "Status")
+
+ggarrange(legend.grob = get_legend(legend),
+          legend = "right",
+          pcoa.jacc,pcoa.bc,
+          pcoa.wu,pcoa.uu, ncol = 2, nrow = 2)
+pdf(file = paste0(dir_graph, "PCoA.pdf"), he = 12, wi = 12)
+ggarrange(legend.grob = get_legend(legend),
+          legend = "right",
+          pcoa.jacc,pcoa.bc,
+          pcoa.wu,pcoa.uu, ncol = 2, nrow = 2)
+dev.off()
+```
+
+## Part IV: Gut transplantation
+[back to top](#back to top)
+
+Lastly, download the data of samples involved in the gut transplant with their AS before 
+transplant and after transplant, with their respective combinations
+
+```{r file load transplant, eval = T}
+data_recipient <- read.table(file = paste0(dir_dataset, "aggregation_after_transplant.txt"), sep = "\t", header = T)
+data_transplant <- read.table(file = paste0(dir_dataset, "transplant_data.txt"), sep = "\t", header = T)
+```
+
+As made for the **AS_data file** we create **AS_transplant** with the AS72 after gut transplant and join it to the previous information concerning the **gut donor** and **gut recipient** with their respective **aggregation level**.
+
+```{r AS data transplant file,  eval = T, message=FALSE, warning=FALSE}
+data_transplant <- read.table(file = paste0(dir_dataset, "transplant_data.txt"), sep = "\t", header = T)
+AS_transplant <- left_join(data_transplant,
+                           data_recipient %>% 
+                             group_by(ID_Recipient,day) %>% 
+                             summarise(Aggregation = sum(attraction)) %>%
+                             pivot_wider(names_from = day, values_from = Aggregation) %>%
+                             mutate(AS72_after = sum(c_across(D1_after:D3_after))) %>%
+                             as.data.frame(),
+                           by = "ID_Recipient") %>%
+  mutate(Delta = AS72_after-AS72_before) # Create the delta variation of the AS
+
+write.table(AS_transplant , file = paste0(dir_dataset, "AS_transplant.txt"), sep = "\t", row.names = F)
+```
+
+Finally, we analysed data from the transplant experiment using a LM, in which we entered the AS measured after gut transplant as a response variable, while we used the aggregation status (*i.e.,* high or low AS) of the recipient female before gut transplant, the aggregation status of the donor female before transplant and their interaction as explanatory variables.
+
+
+```{r lm transplant, eval = T, results='hide'}
+AS_transplant <- read.table(file = paste0(dir_dataset, "AS_transplant.txt"), sep = "\t",header=T)
+AS_transplant$Couple <- factor(AS_transplant$Couple, levels = c("Low_Low",
+                                                                "High_Low"))
+
+lm_transplant <- lm(AS72_after ~  AS72_Donor, 
+                  data = AS_transplant)
+simulationOutput <- simulateResiduals(fittedModel = lm_transplant, plot = T)
+testResiduals(lm_transplant)
+car::Anova(lm_transplant)
+
+t.test(Delta~ Couple,
+       AS_transplant %>% filter(Couple %in% c("Low_Low", "High_Low")), 
+       var=T)
+```
+
+```{r graph, eval = T, results='hide'}
+AS_transplant <- read.table(file = paste0(dir_dataset, "AS_transplant.txt"), sep = "\t",header=T)
+AS_transplant$Couple <- factor(AS_transplant$Couple, levels = c("Low_Low",
+                                                                "High_Low"))
+colnames(AS_transplant)[c(13,17)] <-colnames(AS_transplant)[c(13,17)] <- c("Before", "After")
+
+
+Fig_transplant <- ggpaired(AS_transplant %>% filter(Couple %in% c("Low_Low", "High_Low")), 
+         cond1 = "Before", cond2 = "After",
+         line.color = "gray", 
+         line.size = 0.4,
+         point.size = 0,
+         fill = "condition",
+         palette = c("aliceblue","azure3")) +
+  geom_point(alpha = 0.5, size = 3) +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_text(family = "serif",size = 16),
+        axis.text = element_text(family = "serif",size = 16),
+        axis.text.x = element_text(family = "serif",size = 16),
+        axis.text.y = element_text(family = "serif",size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none",
+        strip.text.x = element_text(size=15, family = "serif"))+
+  facet_grid(~ Couple)+
+  geom_vline(xintercept = 2.59, linetype="dotted", color = "black", size=.5)+
+  labs(y = "Aggregation Score 72h")
+
+Fig_transplant
+
+pdf(file = paste0(dir_graph, "Fig_transplant.pdf"), he = 7, wi = 10)
+Fig_transplant
+dev.off()
+```
+
